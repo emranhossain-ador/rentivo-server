@@ -153,6 +153,39 @@ app.post("/equipment", async (req, res) => {
   }
 });
 
+
+// Get Equipments by Owner Id
+app.get("/equipment/owner/:ownerId", async (req, res) => {
+  try {
+    const { ownerId } = req.params;
+
+    if (!ownerId) {
+      return res.status(400).send({
+        success: false,
+        message: "User ID is required",
+      });
+    }
+
+    const result = await equipmentsCollection
+        .find({ ownerId: ownerId })
+        .sort({ createdAt: -1 })
+        .toArray();
+
+    res.status(200).send({
+      success: true,
+      message: "User equipment fetched successfully",
+      data: result,
+    });
+  } catch (error) {
+    console.error("Get User Equipment Error:", error);
+
+    res.status(500).send({
+      success: false,
+      message: "Failed to fetch user equipment",
+    });
+  }
+});
+
 //----------------- Equipments Api End ------------------------
 
 

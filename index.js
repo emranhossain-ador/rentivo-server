@@ -28,6 +28,7 @@ export async function connectToMongoDB() {
 const connetClient = await connectToMongoDB();
 const db = connetClient.db('rentivodb');
 const users = db.collection('user');
+const equipmentsCollection = db.collection('equipments');
 
 
 
@@ -120,6 +121,39 @@ app.patch('/user/:Id/role', async (req, res) => {
     }
 });
 
+
+//----------------- Equipments Api Start ----------------------
+
+// Create Equipment api http://localhost:5001/equipment
+app.post("/equipment", async (req, res) => {
+  try {
+    const equipmentData = {
+      ...req.body,
+      status: "pending",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    const result = await equipmentsCollection.insertOne(equipmentData);
+
+    res.status(201).send({
+      success: true,
+      message: "Equipment added successfully!",
+      data: result,
+    });
+  } catch (error) {
+    console.error("Add Equipment Error:", error);
+
+    res.status(500).send({
+      success: false,
+      message: error instanceof Error
+        ? error.message
+        : "Failed to add equipment!",
+    });
+  }
+});
+
+//----------------- Equipments Api End ------------------------
 
 
 app.listen(PORT, () => {

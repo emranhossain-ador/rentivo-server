@@ -154,6 +154,156 @@ app.post("/equipment", async (req, res) => {
 });
 
 
+// Get Single equipment by Id
+app.get("/equipment/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({
+        success: false,
+        message: "Invalid equipment ID",
+      });
+    }
+
+    const equipment = await equipmentsCollection.findOne({
+      _id: new ObjectId(id),
+    });
+
+    if (!equipment) {
+      return res.status(404).send({
+        success: false,
+        message: "Equipment not found",
+      });
+    }
+
+    res.send({
+      success: true,
+      data: equipment,
+    });
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).send({
+      success: false,
+      message: "Failed to fetch equipment",
+    });
+  }
+});
+
+
+// Equipment Update Api
+app.patch("/equipment/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({
+        success: false,
+        message: "Invalid equipment ID",
+      });
+    }
+
+    const {
+      equipmentName,
+      description,
+      categoryName,
+      location,
+      rentalPrice,
+      rentalType,
+      quantity,
+      condition,
+      brand,
+      model,
+      images,
+      terms,
+    } = req.body;
+
+    // Only allow editable fields
+    const updateData = {
+      equipmentName,
+      description,
+      categoryName,
+      location,
+      rentalPrice,
+      rentalType,
+      quantity,
+      condition,
+      brand,
+      model,
+      images,
+      terms,
+      updatedAt: new Date(),
+    };
+
+    const result = await equipmentsCollection.updateOne(
+      {
+        _id: new ObjectId(id)
+      },
+      {
+        $set: updateData,
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).send({
+        success: false,
+        message: "Equipment not found or access denied",
+      });
+    }
+
+    res.send({
+      success: true,
+      message: "Equipment updated successfully!",
+    });
+  } catch (error) {
+    console.error("Update Equipment Error:", error);
+
+    res.status(500).send({
+      success: false,
+      message: "Failed to update equipment",
+    });
+  }
+});
+
+// Equipment Delete api
+app.delete("/equipment/:id", async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        if (!ObjectId.isValid(id)) {
+            return res.status(400).send({
+                success: false,
+                message: "Invalid equipment ID",
+            });
+        }
+
+        const result = await equipmentsCollection.deleteOne({
+            _id: new ObjectId(id),
+        });
+
+        if (result.deletedCount === 0) {
+            return res.status(404).send({
+                success: false,
+                message: "Equipment not found",
+            });
+        }
+
+        res.status(200).send({
+            success: true,
+            message: "Equipment deleted successfully!",
+        });
+    } catch (error) {
+        console.error("Delete equipment error:", error);
+
+        res.status(500).send({
+            success: false,
+            message: "Failed to delete equipment",
+        });
+    }
+});
+
+
 // Get Equipments by Owner Id
 app.get("/equipment/owner/:ownerId", async (req, res) => {
   try {

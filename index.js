@@ -43,14 +43,6 @@ app.get('/users', async (req, res) => {
 
         const query = {};
 
-        // Search by name and email
-        if (search) {
-            query.$or = [
-                { name: { $regex: search, $options: "i" } },
-                { email: { $regex: search, $options: "i" } },
-            ];
-        }
-
         // Filter by role
         if (role && role !== "all") {
             query.role = role;
@@ -301,7 +293,7 @@ app.delete("/equipment/:id", async (req, res) => {
             message: "Failed to delete equipment",
         });
     }
-});
+ });
 
 
 // Get Equipments by Owner Id
@@ -335,6 +327,89 @@ app.get("/equipment/owner/:ownerId", async (req, res) => {
     });
   }
 });
+
+
+//Get All Equipments
+app.get("/equipments", async (req, res) => {
+  try {
+    const { category, status, sortBy } = req.query;
+
+    // Build filter
+    const filter = {};
+
+    if (category && category !== "all") {
+      filter.categoryName = category;
+    }
+
+    if (status && status !== "all") {
+      filter.status = status;
+    }
+
+    // Sorting options
+    const sortOptions = {
+      newest: { createdAt: -1 },
+      oldest: { createdAt: 1 },
+      first: { _id: 1 },
+      "price:low-high": { rentalPrice: 1 },
+      "price:high-low": { rentalPrice: -1 },
+    };
+
+    const sort = sortOptions[sortBy] || { createdAt: -1 };
+
+    
+    const result = await equipmentsCollection.aggregate([
+      {
+        $match: filter,
+      },
+      {
+        $sort: sort,
+      },
+      {
+        $addFields: {
+          ownerObjectId: {
+            $toObjectId: "$ownerId",
+          },
+        },
+      },
+      {
+        $lookup: {
+          from: "user",
+          localField: "ownerObjectId",
+          foreignField: "_id",
+          as: "owner",
+        },
+      },
+      {
+        $unwind: {
+          path: "$owner",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      {
+        $project: {
+          ownerObjectId: 0,
+          "owner.password": 0,
+          "owner.__v": 0,
+        },
+      },
+    ]).toArray();
+
+
+    res.status(200).send({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    console.error("Get equipments error:", error);
+
+    res.status(500).send({
+      success: false,
+      message: "Failed to fetch equipments",
+    });
+  }
+});
+
+
 
 //----------------- Equipments Api End ------------------------
 

@@ -410,6 +410,68 @@ app.get("/equipments", async (req, res) => {
 });
 
 
+// Status update api
+app.patch("/equipment/:id/status", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    // Validate equipment ID
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({
+        success: false,
+        message: "Invalid equipment ID",
+      });
+    }
+
+    // Allowed statuses
+    const allowedStatuses = [
+      "pending",
+      "approved",
+      "rejected",
+    ];
+
+    if (!allowedStatuses.includes(status)) {
+      return res.status(400).send({
+        success: false,
+        message: "Invalid equipment status",
+      });
+    }
+
+    // Update equipment status
+    const result = await equipmentsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $set: {
+          status,
+          updatedAt: new Date(),
+        },
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).send({
+        success: false,
+        message: "Equipment not found",
+      });
+    }
+
+    res.status(200).send({
+      success: true,
+      message: "Equipment status updated successfully!",
+    });
+
+  } catch (error) {
+    console.error("Update equipment status error:", error);
+
+    res.status(500).send({
+      success: false,
+      message: "Failed to update equipment status",
+    });
+  }
+});
+
+
 
 //----------------- Equipments Api End ------------------------
 

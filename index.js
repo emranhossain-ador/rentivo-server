@@ -505,6 +505,132 @@ app.get("/equipments/latest-approved", async (req, res) => {
 
 
 
+app.get("/approved-equipments", async (req, res) => {
+  try {
+    const {
+      search,
+      category,
+      rentalType,
+      minPrice,
+      maxPrice,
+      availability,
+      sortBy = "recent",
+    } = req.query;
+
+    // Filter
+    const filter = {
+      status: "approved",
+    };
+
+    // Search by equipment name and location
+    if (search && typeof search === "string") {
+      const escapedSearch = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+      filter.$or = [
+        { equipmentName: { $regex: escapedSearch, $options: "i" } },
+        { location: { $regex: escapedSearch, $options: "i" } },
+      ];
+    }
+
+    // Category Filter
+    if (category && category !== "all") {
+      filter.categorySlug = category;
+    }
+
+    // Rental Type Filter
+    if (rentalType && rentalType !== "all") {
+      filter.rentalType = rentalType;
+    }
+
+    // Price Range Filter
+    if (minPrice !== undefined || maxPrice !== undefined) {
+      filter.rentalPrice = {};
+
+      if (minPrice !== undefined && minPrice !== "") {
+        filter.rentalPrice.$gte = Number(minPrice);
+      }
+
+      if (maxPrice !== undefined && maxPrice !== "") {
+        filter.rentalPrice.$lte = Number(maxPrice);
+      }
+    }
+
+    // Availability Filter
+    if (availability === "available") {
+      filter.quantity = { $gt: 0 };
+    } else if (availability === "unavailable") {
+      filter.quantity = { $lte: 0 };
+    }
+
+    // Sorting
+    const sortOptions = {
+      "price-low-high": { rentalPrice: 1 },
+      "price-high-low": { rentalPrice: -1 },
+      recent: { createdAt: -1 },
+    };
+
+    const sort = sortOptions[sortBy] || sortOptions.recent;
+
+    // Aggregation
+    const result = await equipmentsCollection.aggregate([
+      { $match: filter },
+
+      { $sort: sort },
+
+      {
+        $addFields: {
+          ownerObjectId: {
+            $convert: {
+              input: "$ownerId",
+              to: "objectId",
+              onError: null,
+              onNull: null,
+            },
+          },
+        },
+      },
+
+      {
+        $lookup: {
+          from: "user",
+          localField: "ownerObjectId",
+          foreignField: "_id",
+          as: "owner",
+        },
+      },
+
+      {
+        $unwind: {
+          path: "$owner",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+
+      {
+        $project: {
+          ownerObjectId: 0,
+          "owner.password": 0,
+          "owner.__v": 0,
+        },
+      },
+    ]).toArray();
+
+    res.status(200).send({
+      success: true,
+      total: result.length,
+      data: result,
+    });
+
+  } catch (error) {
+    console.error("Approved equipment error:", error);
+
+    res.status(500).send({
+      success: false,
+      message: "Failed to fetch approved equipment",
+    });
+  }
+});
+
 
 
 

@@ -30,6 +30,13 @@ const db = connetClient.db('rentivodb');
 const users = db.collection('user');
 const equipmentsCollection = db.collection('equipments');
 const categoriesCollection = db.collection('categories');
+const favoritesCollection = db.collection("favorites");
+
+// Create unique index
+await favoritesCollection.createIndex(
+  { userId: 1, equipmentId: 1 },
+  { unique: true }
+);
 
 
 
@@ -165,23 +172,63 @@ app.get("/equipment/:id", async (req, res) => {
       });
     }
 
-    const equipment = await equipmentsCollection.findOne({
-      _id: new ObjectId(id),
-    });
+    const result = await equipmentsCollection.aggregate([
+      {
+        $match: {
+          _id: new ObjectId(id),
+        },
+      },
+      {
+        $addFields: {
+          ownerObjectId: {
+            $convert: {
+              input: "$ownerId",
+              to: "objectId",
+              onError: null,
+              onNull: null,
+            },
+          },
+        },
+      },
+      {
+        $lookup: {
+          from: "user",
+          localField: "ownerObjectId",
+          foreignField: "_id",
+          as: "owner",
+        },
+      },
+      {
+        $unwind: {
+          path: "$owner",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      {
+        $project: {
+          ownerObjectId: 0,
 
-    if (!equipment) {
+          // Only expose public owner information
+          "owner.password": 0,
+          "owner.__v": 0,
+        },
+      },
+    ]).toArray();
+
+    if (!result.length) {
       return res.status(404).send({
         success: false,
         message: "Equipment not found",
       });
     }
 
-    res.send({
+    res.status(200).send({
       success: true,
-      data: equipment,
+      data: result[0],
     });
+
   } catch (error) {
-    console.error(error);
+    console.error("Get equipment error:", error);
 
     res.status(500).send({
       success: false,
@@ -501,10 +548,6 @@ app.get("/equipments/latest-approved", async (req, res) => {
   }
 });
 
-
-
-
-
 app.get("/approved-equipments", async (req, res) => {
   try {
     const {
@@ -629,6 +672,173 @@ app.get("/approved-equipments", async (req, res) => {
       message: "Failed to fetch approved equipment",
     });
   }
+});
+
+
+// Add favorites
+app.post("/favorites", async (req, res) => {
+  try {
+    const { equipmentId, userId } = req.body;
+
+    if (!ObjectId.isValid(equipmentId) || !ObjectId.isValid(userId)) {
+      return res.status(400).send({
+        success: false,
+        message: "Invalid equipment ID",
+      });
+    }
+
+    const equipment = await equipmentsCollection.findOne({
+      _id: new ObjectId(equipmentId),
+      status: "approved",
+    });
+
+    if (!equipment) {
+      return res.status(404).send({
+        success: false,
+        message: "Equipment not found",
+      });
+    }
+
+    await favoritesCollection.insertOne({
+      userId,
+      equipmentId: new ObjectId(equipmentId),
+      createdAt: new Date(),
+    });
+
+    res.status(201).send({
+      success: true,
+      message: "Added to favorites",
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).send({
+        success: false,
+        message: "Already added to favorites",
+      });
+    }
+
+    console.error(error);
+    res.status(500).send({
+      success: false,
+      message: "Failed to add favorite",
+    });
+  }
+});
+
+
+
+app.get("/favorites/:equipmentId/:userId",  async (req, res) => {
+  try {
+    const { equipmentId, userId } = req.params;
+
+    if (!ObjectId.isValid(equipmentId)) {
+      return res.status(400).send({
+        success: false,
+        message: "Invalid equipment ID",
+      });
+    }
+
+    const favorite = await favoritesCollection.findOne({
+      userId,
+      equipmentId: new ObjectId(equipmentId),
+    });
+
+    res.status(200).send({
+      success: true,
+      isFavorite: !!favorite,
+    });
+
+  } catch (error) {
+    res.status(500).send({
+      success: false,
+      message: "Failed to check favorite",
+    });
+  }
+});
+
+
+
+app.get("/favorites/:userId", async (req, res) => {
+    try {
+        const { userId } = req.params;
+
+        const result = await favoritesCollection.aggregate([
+            {
+                $match: { userId },
+            },
+            {
+                $sort: { createdAt: -1 },
+            },
+            {
+                $lookup: {
+                    from: "equipments",
+                    localField: "equipmentId",
+                    foreignField: "_id",
+                    as: "equipment",
+                },
+            },
+            {
+                $unwind: "$equipment",
+            },
+        ]).toArray();
+
+        res.status(200).send({
+            success: true,
+            total: result.length,
+            data: result,
+        });
+
+    } catch (error) {
+        console.error("Get favorites error:", error);
+
+        res.status(500).send({
+            success: false,
+            message: "Failed to fetch favorites",
+        });
+    }
+});
+
+
+
+
+app.delete("/favorites/:favoriteId/:userId", async (req, res) => {
+    try {
+        const { favoriteId, userId } = req.params;
+
+
+        // Validate equipment ID only
+        if (!ObjectId.isValid(favoriteId)) {
+            return res.status(400).send({
+                success: false,
+                message: "Invalid equipment ID",
+            });
+        }
+
+        const result = await favoritesCollection.deleteOne({
+            userId,
+            _id: new ObjectId(favoriteId),
+        });
+
+        if (result.deletedCount === 0) {
+            return res.status(404).send({
+                success: false,
+                message: "Favorite not found",
+            });
+        }
+
+        res.status(200).send({
+            success: true,
+            message: "Removed from favorites successfully",
+        });
+
+    } catch (error) {
+        console.error("Remove favorite error:", error);
+
+        res.status(500).send({
+            success: false,
+            message: "Failed to remove favorite",
+        });
+    }
 });
 
 

@@ -29,6 +29,7 @@ const connetClient = await connectToMongoDB();
 const db = connetClient.db('rentivodb');
 const users = db.collection('user');
 const equipmentsCollection = db.collection('equipments');
+const categoriesCollection = db.collection('categories');
 
 
 
@@ -112,6 +113,12 @@ app.patch('/user/:Id/role', async (req, res) => {
         });
     }
 });
+
+
+app.get('/categoris', async(req, res)=>{
+  const result = await categoriesCollection.find().toArray();
+  res.send(result);
+})
 
 
 //----------------- Equipments Api Start ----------------------
@@ -200,6 +207,7 @@ app.patch("/equipment/:id", async (req, res) => {
       equipmentName,
       description,
       categoryName,
+      categorySlug,
       location,
       rentalPrice,
       rentalType,
@@ -216,6 +224,7 @@ app.patch("/equipment/:id", async (req, res) => {
       equipmentName,
       description,
       categoryName,
+      categorySlug,
       location,
       rentalPrice,
       rentalType,
@@ -470,6 +479,32 @@ app.patch("/equipment/:id/status", async (req, res) => {
     });
   }
 });
+
+
+app.get("/equipments/latest-approved", async (req, res) => {
+  try {
+    const result = await equipmentsCollection
+      .find({ status: "approved" })
+      .sort({ createdAt: -1 })
+      .limit(6)
+      .toArray();
+
+    res.status(200).send({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    res.status(500).send({
+      success: false,
+      message: "Failed to fetch latest approved equipment",
+    });
+  }
+});
+
+
+
+
+
 
 
 

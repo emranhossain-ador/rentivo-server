@@ -31,6 +31,7 @@ const users = db.collection('user');
 const equipmentsCollection = db.collection('equipments');
 const categoriesCollection = db.collection('categories');
 const favoritesCollection = db.collection("favorites");
+const bookingsCollection = db.collection("bookings");
 
 // Create unique index
 await favoritesCollection.createIndex(
@@ -799,8 +800,6 @@ app.get("/favorites/:userId", async (req, res) => {
 });
 
 
-
-
 app.delete("/favorites/:favoriteId/:userId", async (req, res) => {
     try {
         const { favoriteId, userId } = req.params;
@@ -842,9 +841,83 @@ app.delete("/favorites/:favoriteId/:userId", async (req, res) => {
 });
 
 
-
-
 //----------------- Equipments Api End ------------------------
+
+
+//----------------- Booking Api Start ------------------------
+
+
+
+app.post('/bookings', async(req, res)=>{
+  try{
+    const bookingsData = {
+      ...req.body,
+      status: "confirmed",
+      paymentStatus: "pending",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }; 
+
+    const result = await bookingsCollection.insertOne(bookingsData);
+
+    res.status(201).send({
+      success: true,
+      message: "Booking successfully!",
+      data: result,
+    });
+  } catch (error) {
+    console.error("Booking Error:", error);
+
+    res.status(500).send({
+      success: false,
+      message: error instanceof Error
+        ? error.message
+        : "Failed to Booking!",
+    });
+  }
+})
+
+
+
+app.get("/equipment/:equipmentId/booked-dates", async (req, res) => {
+  try {
+    const { equipmentId } = req.params;
+
+    if (!ObjectId.isValid(equipmentId)) {
+      return res.status(400).send({
+        success: false,
+        message: "Invalid equipment ID",
+      });
+    }
+
+    const bookings = await bookingsCollection
+      .find({
+        equipmentId: equipmentId, // Booking document-এ string হিসেবে save করা থাকলে
+        status: "confirmed",
+        paymentStatus: "paid",
+      })
+      .project({
+        _id: 0,
+        startDate: 1,
+        endDate: 1,
+        quantity: 1,
+      })
+      .toArray();
+
+    return res.status(200).send({
+      success: true,
+      data: bookings,
+    });
+  } catch (error) {
+    console.error("Booked dates error:", error);
+
+    return res.status(500).send({
+      success: false,
+      message: "Failed to fetch booked dates",
+    });
+  }
+});
+
 
 
 app.listen(PORT, () => {

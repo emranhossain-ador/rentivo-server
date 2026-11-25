@@ -29,7 +29,7 @@ app.post(
         process.env.STRIPE_WEBHOOK_SECRET
       );
     } catch (error) {
-      console.error("❌ Webhook Signature Error:", error.message);
+      console.error(" Webhook Signature Error:", error.message);
       return res.status(400).send(`Webhook Error: ${error.message}`);
     }
 
@@ -49,7 +49,7 @@ app.post(
 
       return res.sendStatus(200);
     } catch (error) {
-      console.error("❌ Webhook Processing Error:", error);
+      console.error(" Webhook Processing Error:", error);
       return res.sendStatus(500);
     }
   }
@@ -1210,9 +1210,6 @@ app.post("/create-checkout-session", async (req, res) => {
 
 
 
-// Verify a completed payment from the success page.
-// Confirms the booking even if the Stripe webhook is not reachable (local dev).
-// GET /verify-payment?session_id=cs_test_xxx
 app.get("/verify-payment", async (req, res) => {
   try {
     const { session_id } = req.query;
@@ -1315,6 +1312,395 @@ app.get("/equipment/:equipmentId/booked-dates", async (req, res) => {
   }
 });
 
+
+// Get bookings by userId
+// Get bookings by userId with equipment details
+app.get("/bookings/user/:userId", async (req, res) => {
+    try {
+        const { userId } = req.params;
+
+        if (!userId) {
+            return res.status(400).send({
+                success: false,
+                message: "User ID is required",
+            });
+        }
+
+        const result = await bookingsCollection.aggregate([
+            {
+                $match: { userId },
+            },
+            {
+                $addFields: {
+                    equipmentObjectId: {
+                        $convert: {
+                            input: "$equipmentId",
+                            to: "objectId",
+                            onError: null,
+                            onNull: null,
+                        },
+                    },
+                },
+            },
+            {
+                $lookup: {
+                    from: "equipments",
+                    localField: "equipmentObjectId",
+                    foreignField: "_id",
+                    as: "equipment",
+                },
+            },
+            {
+                $unwind: {
+                    path: "$equipment",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+            {
+                $project: {
+                    equipmentObjectId: 0,
+                },
+            },
+            {
+                $sort: { createdAt: -1 },
+            },
+        ]).toArray();
+
+        res.status(200).send({
+            success: true,
+            message: "Bookings fetched successfully",
+            data: result,
+        });
+
+    } catch (error) {
+        console.error("Get bookings error:", error);
+
+        res.status(500).send({
+            success: false,
+            message: "Failed to fetch bookings",
+        });
+    }
+});
+
+
+// Get bookings for owner's equipment
+// Get owner bookings with equipment and customer details
+app.get("/owner/bookings/:ownerId", async (req, res) => {
+    try {
+        const { ownerId } = req.params;
+
+        if (!ownerId) {
+            return res.status(400).send({
+                success: false,
+                message: "Owner ID is required",
+            });
+        }
+
+        const result = await bookingsCollection.aggregate([
+            // Convert equipmentId to ObjectId
+            {
+                $addFields: {
+                    equipmentObjectId: {
+                        $convert: {
+                            input: "$equipmentId",
+                            to: "objectId",
+                            onError: null,
+                            onNull: null,
+                        },
+                    },
+                    customerObjectId: {
+                        $convert: {
+                            input: "$userId",
+                            to: "objectId",
+                            onError: null,
+                            onNull: null,
+                        },
+                    },
+                },
+            },
+
+            // Get equipment details
+            {
+                $lookup: {
+                    from: "equipments",
+                    localField: "equipmentObjectId",
+                    foreignField: "_id",
+                    as: "equipment",
+                },
+            },
+            {
+                $unwind: "$equipment",
+            },
+
+            // Match owner's equipment
+            {
+                $match: {
+                    $expr: {
+                        $eq: [
+                            { $toString: "$equipment.ownerId" },
+                            ownerId,
+                        ],
+                    },
+                },
+            },
+
+            // Get customer information
+            {
+                $lookup: {
+                    from: "user",
+                    localField: "customerObjectId",
+                    foreignField: "_id",
+                    as: "customer",
+                },
+            },
+            {
+                $unwind: {
+                    path: "$customer",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+
+            // Select required customer fields
+            {
+                $addFields: {
+                    customer: {
+                        _id: "$customer._id",
+                        name: "$customer.name",
+                        email: "$customer.email",
+                        image: "$customer.image",
+                        phone: "$customer.phone",
+                    },
+                },
+            },
+
+            // Latest bookings first
+            {
+                $sort: {
+                    createdAt: -1,
+                },
+            },
+
+            {
+                $project: {
+                    equipmentObjectId: 0,
+                    customerObjectId: 0,
+                },
+            },
+        ]).toArray();
+
+        res.status(200).send({
+            success: true,
+            message: "Owner bookings fetched successfully",
+            data: result,
+        });
+
+    } catch (error) {
+        console.error("Get owner bookings error:", error);
+
+        res.status(500).send({
+            success: false,
+            message: "Failed to fetch owner bookings",
+        });
+    }
+});
+
+
+
+app.get("/admin/bookings", async (req, res) => {
+  try {
+    const result = await bookingsCollection.aggregate([
+      // Convert booking IDs to ObjectId
+      {
+        $addFields: {
+          equipmentObjectId: {
+            $convert: {
+              input: "$equipmentId",
+              to: "objectId",
+              onError: null,
+              onNull: null,
+            },
+          },
+          customerObjectId: {
+            $convert: {
+              input: "$userId",
+              to: "objectId",
+              onError: null,
+              onNull: null,
+            },
+          },
+        },
+      },
+
+      // Get equipment information
+      {
+        $lookup: {
+          from: "equipments",
+          localField: "equipmentObjectId",
+          foreignField: "_id",
+          as: "equipment",
+        },
+      },
+      {
+        $unwind: {
+          path: "$equipment",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+
+      // Convert equipment ownerId to ObjectId
+      {
+        $addFields: {
+          ownerObjectId: {
+            $convert: {
+              input: "$equipment.ownerId",
+              to: "objectId",
+              onError: null,
+              onNull: null,
+            },
+          },
+        },
+      },
+
+      // Get customer information
+      {
+        $lookup: {
+          from: "user",
+          localField: "customerObjectId",
+          foreignField: "_id",
+          as: "customer",
+        },
+      },
+      {
+        $unwind: {
+          path: "$customer",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+
+      // Get owner information
+      {
+        $lookup: {
+          from: "user",
+          localField: "ownerObjectId",
+          foreignField: "_id",
+          as: "owner",
+        },
+      },
+      {
+        $unwind: {
+          path: "$owner",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+
+      // Select safe fields
+      {
+        $project: {
+          equipmentObjectId: 0,
+          customerObjectId: 0,
+          ownerObjectId: 0,
+
+          "customer.password": 0,
+          "customer.passwordHash": 0,
+          "customer.accounts": 0,
+
+          "owner.password": 0,
+          "owner.passwordHash": 0,
+          "owner.accounts": 0,
+        },
+      },
+
+      // Latest bookings first
+      {
+        $sort: {
+          createdAt: -1,
+        },
+      },
+    ]).toArray();
+
+    res.status(200).send({
+      success: true,
+      message: "All bookings fetched successfully",
+      total: result.length,
+      data: result,
+    });
+  } catch (error) {
+    console.error("Get admin bookings error:", error);
+
+    res.status(500).send({
+      success: false,
+      message: "Failed to fetch bookings",
+    });
+  }
+});
+
+
+app.patch("/admin/bookings/:bookingId", async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const { status, paymentStatus } = req.body;
+
+    if (!ObjectId.isValid(bookingId)) {
+      return res.status(400).send({
+        success: false,
+        message: "Invalid booking ID",
+      });
+    }
+
+    const allowedStatus = [
+      "pending",
+      "confirmed",
+      "completed",
+      "cancelled",
+    ];
+
+    const allowedPaymentStatus = [
+      "pending",
+      "paid",
+      "failed",
+      "refunded",
+    ];
+
+    if (
+      !allowedStatus.includes(status) ||
+      !allowedPaymentStatus.includes(paymentStatus)
+    ) {
+      return res.status(400).send({
+        success: false,
+        message: "Invalid status",
+      });
+    }
+
+    const result = await bookingsCollection.updateOne(
+      { _id: new ObjectId(bookingId) },
+      {
+        $set: {
+          status,
+          paymentStatus,
+          updatedAt: new Date(),
+        },
+      }
+    );
+
+    if (!result.matchedCount) {
+      return res.status(404).send({
+        success: false,
+        message: "Booking not found",
+      });
+    }
+
+    res.send({
+      success: true,
+      message: "Booking updated successfully",
+    });
+  } catch (error) {
+    console.error("Booking update error:", error);
+    res.status(500).send({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+});
 
 
 app.listen(PORT, () => {

@@ -3,6 +3,7 @@ import cors from "cors";
 const app = express();
 
 import { MongoClient, ObjectId } from 'mongodb';
+import { createAuthMiddleware } from './middleware/auth.js';
 
 import 'dotenv/config'
 import Stripe from "stripe";
@@ -93,6 +94,89 @@ await paymentsCollection.createIndex(
 );
 
 
+// ---------------------- Auth middleware ----------------------
+const {
+  tokenVerify,
+  verifyRole,
+  verifyAdmin,
+  verifyOwner,
+  verifyCustomer,
+  verifyOwnerOrAdmin,
+} = createAuthMiddleware(db);
+
+// Only the owner of the equipment (or an admin) may change it
+async function verifyEquipmentOwner(req, res, next) {
+  try {
+    const { id } = req.params;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({
+        success: false,
+        message: "Invalid equipment ID",
+      });
+    }
+
+    const equipment = await equipmentsCollection.findOne({
+      _id: new ObjectId(id),
+    });
+
+    if (!equipment) {
+      return res.status(404).send({
+        success: false,
+        message: "Equipment not found",
+      });
+    }
+
+    const isOwner = String(equipment.ownerId) === String(req.user._id);
+    const isAdmin = req.user.role === "admin";
+
+    if (!isOwner && !isAdmin) {
+      return res.status(403).send({
+        success: false,
+        message: "Forbidden! You don't own this equipment.",
+      });
+    }
+
+    req.equipment = equipment;
+    return next();
+  } catch (error) {
+    console.error("Equipment owner verification error:", error);
+
+    return res.status(500).send({
+      success: false,
+      message: "Failed to verify equipment owner.",
+    });
+  }
+}
+
+// The logged in user can only act on their own :param (admins can do anything)
+function verifySelf(param = "userId") {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).send({
+        success: false,
+        message: "Unauthorized! Access token is missing.",
+      });
+    }
+
+    const requestedId = req.params[param];
+
+    if (
+      requestedId !== undefined &&
+      String(requestedId) !== String(req.user._id) &&
+      req.user.role !== "admin"
+    ) {
+      return res.status(403).send({
+        success: false,
+        message: "Forbidden! You can only access your own account data.",
+      });
+    }
+
+    return next();
+  };
+}
+
+
 // Confirm a paid Stripe checkout: record the payment + confirm the booking.
 // Safe to call multiple times (webhook retries + success-page verification).
 async function confirmPaidCheckout(session) {
@@ -162,8 +246,41 @@ app.get('/', (req, res)=>{
     res.send("Welcome to the Rentivo server");
 });
 
-// Get All users Api http://localhost:5001/users
-app.get('/users', async (req, res) => {
+// Public stats for the homepage (counts only, no private user data)
+// http://localhost:5001/users/summary
+app.get('/users/summary', async (req, res) => {
+    try {
+        const [total, owners, customers, ownerAvatars] = await Promise.all([
+            users.countDocuments(),
+            users.countDocuments({ role: "owner" }),
+            users.countDocuments({ role: "customer" }),
+            users
+                .find(
+                    { role: "owner" },
+                    { projection: { _id: 1, name: 1, image: 1, role: 1 } }
+                )
+                .limit(5)
+                .toArray(),
+        ]);
+
+        res.send({
+            success: true,
+            data: { total, owners, customers, ownerAvatars },
+        });
+
+    } catch (error) {
+        console.error("Get user summary error:", error);
+
+        res.status(500).send({
+            success: false,
+            message: "Failed to fetch user summary",
+        });
+    }
+});
+
+
+// Get All users Api http://localhost:5001/users  (admin only)
+app.get('/users', tokenVerify, verifyAdmin, async (req, res) => {
     try {
         const { search, role } = req.query;
 
@@ -186,8 +303,8 @@ app.get('/users', async (req, res) => {
     }
 });
 
-// User Update Api http://localhost:5001/user/:Id/role
-app.patch('/user/:Id/role', async (req, res) => {
+// User Update Api http://localhost:5001/user/:Id/role  (admin only)
+app.patch('/user/:Id/role', tokenVerify, verifyAdmin, async (req, res) => {
     try {
         const { Id } = req.params;
         const { role } = req.body;
@@ -248,11 +365,13 @@ app.get('/categoris', async(req, res)=>{
 
 //----------------- Equipments Api Start ----------------------
 
-// Create Equipment api http://localhost:5001/equipment
-app.post("/equipment", async (req, res) => {
+// Create Equipment api http://localhost:5001/equipment  (owner only)
+app.post("/equipment", tokenVerify, verifyOwner, async (req, res) => {
   try {
     const equipmentData = {
       ...req.body,
+      // Owner always comes from the logged in user, never from the request body
+      ownerId: String(req.user._id),
       status: "pending",
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -279,7 +398,7 @@ app.post("/equipment", async (req, res) => {
 
 
 // Get Single equipment by Id
-app.get("/equipment/:id", async (req, res) => {
+app.get("/equipment/:id", tokenVerify, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -356,8 +475,8 @@ app.get("/equipment/:id", async (req, res) => {
 });
 
 
-// Equipment Update Api
-app.patch("/equipment/:id", async (req, res) => {
+// Equipment Update Api  (owner of the equipment or admin)
+app.patch("/equipment/:id", tokenVerify, verifyEquipmentOwner, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -432,8 +551,8 @@ app.patch("/equipment/:id", async (req, res) => {
   }
 });
 
-// Equipment Delete api
-app.delete("/equipment/:id", async (req, res) => {
+// Equipment Delete api  (owner of the equipment or admin)
+app.delete("/equipment/:id", tokenVerify, verifyEquipmentOwner, async (req, res) => {
     try {
         const { id } = req.params;
 
@@ -470,8 +589,8 @@ app.delete("/equipment/:id", async (req, res) => {
  });
 
 
-// Get Equipments by Owner Id
-app.get("/equipment/owner/:ownerId", async (req, res) => {
+// Get Equipments by Owner Id  (only the owner themselves, or an admin)
+app.get("/equipment/owner/:ownerId", tokenVerify, verifySelf("ownerId"), async (req, res) => {
   try {
     const { ownerId } = req.params;
 
@@ -584,8 +703,8 @@ app.get("/equipments", async (req, res) => {
 });
 
 
-// Status update api
-app.patch("/equipment/:id/status", async (req, res) => {
+// Status update api  (admin only)
+app.patch("/equipment/:id/status", tokenVerify, verifyAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
@@ -793,12 +912,13 @@ app.get("/approved-equipments", async (req, res) => {
 });
 
 
-// Add favorites
-app.post("/favorites", async (req, res) => {
+// Add favorites  (any signed in user — the userId always comes from the token)
+app.post("/favorites", tokenVerify, async (req, res) => {
   try {
-    const { equipmentId, userId } = req.body;
+    const { equipmentId } = req.body;
+    const userId = String(req.user._id);
 
-    if (!ObjectId.isValid(equipmentId) || !ObjectId.isValid(userId)) {
+    if (!ObjectId.isValid(equipmentId)) {
       return res.status(400).send({
         success: false,
         message: "Invalid equipment ID",
@@ -845,7 +965,7 @@ app.post("/favorites", async (req, res) => {
 
 
 
-app.get("/favorites/:equipmentId/:userId",  async (req, res) => {
+app.get("/favorites/:equipmentId/:userId", tokenVerify, verifySelf(), async (req, res) => {
   try {
     const { equipmentId, userId } = req.params;
 
@@ -876,7 +996,7 @@ app.get("/favorites/:equipmentId/:userId",  async (req, res) => {
 
 
 
-app.get("/favorites/:userId", async (req, res) => {
+app.get("/favorites/:userId", tokenVerify, verifySelf(), async (req, res) => {
     try {
         const { userId } = req.params;
 
@@ -917,7 +1037,7 @@ app.get("/favorites/:userId", async (req, res) => {
 });
 
 
-app.delete("/favorites/:favoriteId/:userId", async (req, res) => {
+app.delete("/favorites/:favoriteId/:userId", tokenVerify, verifySelf(), async (req, res) => {
     try {
         const { favoriteId, userId } = req.params;
 
@@ -963,13 +1083,12 @@ app.delete("/favorites/:favoriteId/:userId", async (req, res) => {
 
 //----------------- Booking Api Start ------------------------
 
-app.post("/create-checkout-session", async (req, res) => {
+app.post("/create-checkout-session", tokenVerify, async (req, res) => {
   let bookingId;
 
   try {
     const {
       equipmentId,
-      userId,
       startDate,
       endDate,
       quantity,
@@ -978,10 +1097,12 @@ app.post("/create-checkout-session", async (req, res) => {
       notes,
     } = req.body;
 
+    // The booking always belongs to the signed in user (never the request body)
+    const userId = String(req.user._id);
+
     // 1. Validate input
     if (
       !ObjectId.isValid(equipmentId) ||
-      !userId ||
       !startDate ||
       !endDate ||
       !contactNumber?.trim() ||
@@ -1313,9 +1434,8 @@ app.get("/equipment/:equipmentId/booked-dates", async (req, res) => {
 });
 
 
-// Get bookings by userId
-// Get bookings by userId with equipment details
-app.get("/bookings/user/:userId", async (req, res) => {
+// Get bookings by userId with equipment details  (own bookings only)
+app.get("/bookings/user/:userId", tokenVerify, verifySelf(), async (req, res) => {
     try {
         const { userId } = req.params;
 
@@ -1383,9 +1503,8 @@ app.get("/bookings/user/:userId", async (req, res) => {
 });
 
 
-// Get bookings for owner's equipment
-// Get owner bookings with equipment and customer details
-app.get("/owner/bookings/:ownerId", async (req, res) => {
+// Get owner bookings with equipment and customer details  (owner only)
+app.get("/owner/bookings/:ownerId", tokenVerify, verifyOwner, verifySelf("ownerId"), async (req, res) => {
     try {
         const { ownerId } = req.params;
 
@@ -1506,7 +1625,8 @@ app.get("/owner/bookings/:ownerId", async (req, res) => {
 
 
 
-app.get("/admin/bookings", async (req, res) => {
+// Get all bookings  (admin only)
+app.get("/admin/bookings", tokenVerify, verifyAdmin, async (req, res) => {
   try {
     const result = await bookingsCollection.aggregate([
       // Convert booking IDs to ObjectId
@@ -1635,7 +1755,8 @@ app.get("/admin/bookings", async (req, res) => {
 });
 
 
-app.patch("/admin/bookings/:bookingId", async (req, res) => {
+// Update booking status  (admin only)
+app.patch("/admin/bookings/:bookingId", tokenVerify, verifyAdmin, async (req, res) => {
   try {
     const { bookingId } = req.params;
     const { status, paymentStatus } = req.body;
